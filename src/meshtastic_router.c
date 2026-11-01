@@ -9,6 +9,8 @@
 #include <errno.h>
 #include <string.h>
 
+#include <zephyr/kernel.h>
+#include <zephyr/random/random.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
@@ -89,27 +91,147 @@ static void reack_duplicate(const uint8_t *buf, int len, int16_t rssi, int8_t sn
 	meshtastic_routing_on_decoded(&packet);
 }
 
-static void relay_packet(const uint8_t *buf, int len, const struct meshtastic_wire_header *hdr,
-			 uint8_t hop_limit)
-{
-	uint8_t relay_buf[MESHTASTIC_PKT_MAX];
-	struct meshtastic_wire_header *relay_hdr;
-	int ret;
+/*
+ * Rebroadcast scheduling.  A relay goes out after a randomized delay instead
+ * of immediately: the wait keeps this node in receive mode for the rest of a
+ * transmission burst (an immediate relay would turn the radio around into TX
+ * exactly when the sender's next packet arrives), staggers the relays of
+ * neighbouring nodes, and gives us a window to cancel when another node is
+ * heard relaying the same frame first.
+ */
+struct mt_pending_relay {
+	struct k_work_delayable work;
+	uint32_t src;
+	uint32_t id;
+	uint8_t hop_limit; /* hop limit as the frame was first received */
+	uint16_t len;
+	uint8_t wire[MESHTASTIC_PKT_MAX];
+	bool active;
+};
 
-	if (len > (int)MESHTASTIC_PKT_MAX || hop_limit == 0U) {
+static struct mt_pending_relay mt_relay_slots[CONFIG_MESHTASTIC_RELAY_PENDING_MAX];
+static bool mt_relay_works_initialized;
+
+static void mt_relay_work_handler(struct k_work *work)
+{
+    struct mt_pending_relay* slot = CONTAINER_OF(
+        k_work_delayable_from_work(work), struct mt_pending_relay, work);
+
+    int ret;
+
+	if (!slot->active) {
+		return;
+	}
+	slot->active = false;
+
+	if (!meshtastic_is_rebroadcaster()) {
 		return;
 	}
 
-	memcpy(relay_buf, buf, (size_t)len);
-	relay_hdr = (struct meshtastic_wire_header *)relay_buf;
-	relay_hdr->flags = (hdr->flags & ~MESHTASTIC_FLAGS_HOP_LIMIT_MASK) |
-			   ((hop_limit - 1U) & MESHTASTIC_FLAGS_HOP_LIMIT_MASK);
+	LOG_DBG("Relaying id=0x%08x from 0x%08x (len=%u)", slot->id, slot->src, slot->len);
 
-	ret = meshtastic_radio_send_wire(relay_buf, (uint32_t)len);
+	ret = meshtastic_radio_send_wire(slot->wire, slot->len);
 	if (ret < 0) {
 		LOG_ERR("Relay TX failed (%d)", ret);
 	} else {
 		mt.status.relayed_packets++;
+	}
+}
+
+static void mt_relay_init_once(void)
+{
+	if (mt_relay_works_initialized) {
+		return;
+	}
+
+	for (int i = 0; i < CONFIG_MESHTASTIC_RELAY_PENDING_MAX; i++) {
+		k_work_init_delayable(&mt_relay_slots[i].work, mt_relay_work_handler);
+	}
+
+	mt_relay_works_initialized = true;
+}
+
+static uint32_t mt_relay_delay_ms(const struct meshtastic_wire_header *hdr)
+{
+	uint32_t hop_start = (hdr->flags & MESHTASTIC_FLAGS_HOP_START_MASK) >>
+			     MESHTASTIC_FLAGS_HOP_START_SHIFT;
+	uint32_t hop_limit = hdr->flags & MESHTASTIC_FLAGS_HOP_LIMIT_MASK;
+	uint32_t hops_used = (hop_start > hop_limit) ? (hop_start - hop_limit) : 0U;
+	uint32_t per_hop_ms = hops_used * (uint32_t)CONFIG_MESHTASTIC_RELAY_DELAY_PER_HOP_MS;
+	uint32_t min_ms = (uint32_t)CONFIG_MESHTASTIC_RELAY_DELAY_MIN_MS + per_hop_ms;
+	uint32_t max_ms = (uint32_t)CONFIG_MESHTASTIC_RELAY_DELAY_MAX_MS + per_hop_ms;
+
+	if (max_ms <= min_ms) {
+		return min_ms;
+	}
+
+	return min_ms + (sys_rand32_get() % (max_ms - min_ms + 1U));
+}
+
+static void mt_relay_schedule(const uint8_t *wire, size_t wire_len,
+			      const struct meshtastic_wire_header *hdr)
+{
+	struct mt_pending_relay *slot = NULL;
+
+	if (wire_len > MESHTASTIC_PKT_MAX) {
+		return;
+	}
+
+	mt_relay_init_once();
+
+	for (int i = 0; i < CONFIG_MESHTASTIC_RELAY_PENDING_MAX; i++) {
+		/*
+		 * active is cleared by the handler itself, but the work item
+		 * may still be draining (cancel raced with a fire, or the
+		 * handler is mid-TX reading the wire buffer): never reuse a
+		 * slot whose work has not fully quiesced.
+		 */
+		if (!mt_relay_slots[i].active &&
+		    k_work_delayable_busy_get(&mt_relay_slots[i].work) == 0U) {
+			slot = &mt_relay_slots[i];
+			break;
+		}
+	}
+	if (slot == NULL) {
+		LOG_DBG("No pending relay slot free, dropping relay");
+		return;
+	}
+
+	memcpy(slot->wire, wire, wire_len);
+	slot->len = (uint16_t)wire_len;
+	slot->src = sys_le32_to_cpu(hdr->src);
+	slot->id = sys_le32_to_cpu(hdr->id);
+	slot->hop_limit = hdr->flags & MESHTASTIC_FLAGS_HOP_LIMIT_MASK;
+	slot->active = true;
+
+	/* The buffered copy goes out with the hop limit already decremented. */
+	((struct meshtastic_wire_header *)slot->wire)->flags =
+		(hdr->flags & ~MESHTASTIC_FLAGS_HOP_LIMIT_MASK) |
+		((slot->hop_limit - 1U) & MESHTASTIC_FLAGS_HOP_LIMIT_MASK);
+
+	(void)k_work_schedule(&slot->work, K_MSEC(mt_relay_delay_ms(hdr)));
+}
+
+/*
+ * Another copy of a frame awaiting relay was heard.  A copy with a lower hop
+ * limit means someone already relayed it: cancel ours so the flood does not
+ * multiply.  Same-hop copies are the sender's own retransmissions (want_ack
+ * retries) and do not cancel anything.
+ */
+static void mt_relay_on_duplicate(uint32_t src, uint32_t id,
+				  const struct meshtastic_wire_header *hdr)
+{
+	uint8_t hop_limit = hdr->flags & MESHTASTIC_FLAGS_HOP_LIMIT_MASK;
+
+	for (int i = 0; i < CONFIG_MESHTASTIC_RELAY_PENDING_MAX; i++) {
+		struct mt_pending_relay *slot = &mt_relay_slots[i];
+
+		if (slot->active && slot->src == src && slot->id == id &&
+		    hop_limit < slot->hop_limit) {
+			(void)k_work_cancel_delayable(&slot->work);
+			slot->active = false;
+			LOG_DBG("Relay cancelled: another node relayed id=0x%08x", id);
+		}
 	}
 }
 
@@ -205,7 +327,7 @@ void meshtastic_routing_sniff_rebroadcast(const struct meshtastic_wire_header *h
 		return;
 	}
 
-	relay_packet(wire, (int)wire_len, hdr, hop_limit);
+	mt_relay_schedule(wire, wire_len, hdr);
 }
 
 void meshtastic_router_process_lora_rx(const uint8_t *buf, int len, int16_t rssi, int8_t snr)
@@ -252,6 +374,7 @@ void meshtastic_router_process_lora_rx(const uint8_t *buf, int len, int16_t rssi
 #if defined(CONFIG_MESHTASTIC_AIRTIME)
 		meshtastic_airtime_log(MESHTASTIC_AIRTIME_RX_ALL, airtime_ms);
 #endif
+		mt_relay_on_duplicate(src, pkt_id, hdr);
 		reack_duplicate(buf, len, rssi, snr);
 		return;
 	}

@@ -3,10 +3,12 @@
  */
 
 #include <errno.h>
+#include <stdint.h>
 #include <string.h>
 
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
+#include <zephyr/random/random.h>
 #include <zephyr/sys/util.h>
 
 #include <pb_encode.h>
@@ -230,37 +232,87 @@ MESHTASTIC_MODULE_DEFINE(device_telemetry, MESHTASTIC_PORT_TELEMETRY, 0, NULL,
 static K_THREAD_STACK_DEFINE(telemetry_stack, 2048);
 static struct k_thread telemetry_thread;
 
-static uint32_t telemetry_period_sec(void)
+static uint32_t telemetry_broadcast_gap_ms(void)
 {
-	uint32_t period = UINT32_MAX;
+	uint32_t min_ms = (uint32_t)CONFIG_MESHTASTIC_TELEMETRY_BROADCAST_GAP_MIN_MS;
+	uint32_t max_ms = (uint32_t)CONFIG_MESHTASTIC_TELEMETRY_BROADCAST_GAP_MAX_MS;
 
-#if defined(CONFIG_MESHTASTIC_DEVICE_METRICS_AUTO_SEND)
-	period = MIN(period, (uint32_t)CONFIG_MESHTASTIC_DEVICE_METRICS_INTERVAL_SEC);
-#endif
-#if defined(CONFIG_MESHTASTIC_ENVIRONMENT_METRICS) &&                                              \
-	defined(CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_AUTO_SEND)
-	period = MIN(period, (uint32_t)CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_INTERVAL_SEC);
-#endif
+	if (max_ms <= min_ms) {
+		return min_ms;
+	}
 
-	return period;
+	return min_ms + (sys_rand32_get() % (max_ms - min_ms + 1U));
 }
 
 static void telemetry_thread_fn(void *p1, void *p2, void *p3)
 {
+	const bool device_enabled = IS_ENABLED(CONFIG_MESHTASTIC_DEVICE_METRICS_AUTO_SEND);
+	const bool environment_enabled =
+		IS_ENABLED(CONFIG_MESHTASTIC_ENVIRONMENT_METRICS) &&
+		IS_ENABLED(CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_AUTO_SEND);
+	int64_t device_due_ms = 0;
+	int64_t environment_due_ms = 0;
+	int64_t now_ms = k_uptime_get();
+
 	ARG_UNUSED(p1);
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
-	while (true) {
-		k_sleep(K_SECONDS(telemetry_period_sec()));
+	/*
+	 * Each metric type keeps its own interval: the loop wakes for the
+	 * earliest due timer and sends only what is due, rather than sending
+	 * every metric type whenever the shortest interval expires.
+	 */
+	if (device_enabled) {
+		device_due_ms = now_ms + (int64_t)CONFIG_MESHTASTIC_DEVICE_METRICS_INTERVAL_SEC *
+						 MSEC_PER_SEC;
+	}
+	if (environment_enabled) {
+		environment_due_ms =
+			now_ms +
+			(int64_t)CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_INTERVAL_SEC * MSEC_PER_SEC;
+	}
 
-#if defined(CONFIG_MESHTASTIC_DEVICE_METRICS_AUTO_SEND)
-		(void)meshtastic_send_device_metrics(MESHTASTIC_NODE_BROADCAST, K_NO_WAIT);
-#endif
-#if defined(CONFIG_MESHTASTIC_ENVIRONMENT_METRICS) &&                                              \
-	defined(CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_AUTO_SEND)
-		(void)meshtastic_send_environment(MESHTASTIC_NODE_BROADCAST, K_NO_WAIT);
-#endif
+	while (device_enabled || environment_enabled) {
+		int64_t next_due_ms = INT64_MAX;
+		bool sent_any = false;
+
+		if (device_enabled && device_due_ms < next_due_ms) {
+			next_due_ms = device_due_ms;
+		}
+		if (environment_enabled && environment_due_ms < next_due_ms) {
+			next_due_ms = environment_due_ms;
+		}
+
+		now_ms = k_uptime_get();
+		if (next_due_ms > now_ms) {
+			k_sleep(K_MSEC(next_due_ms - now_ms));
+			continue;
+		}
+
+		now_ms = k_uptime_get();
+		if (device_enabled && device_due_ms <= now_ms) {
+			(void)meshtastic_send_device_metrics(MESHTASTIC_NODE_BROADCAST, K_NO_WAIT);
+			device_due_ms = k_uptime_get() +
+					(int64_t)CONFIG_MESHTASTIC_DEVICE_METRICS_INTERVAL_SEC *
+						MSEC_PER_SEC;
+			sent_any = true;
+		}
+		if (environment_enabled && environment_due_ms <= k_uptime_get()) {
+			/*
+			 * Both broadcasts sharing one wake-up: separate them
+			 * by a randomized gap so receiving nodes have finished
+			 * relaying the first before the second arrives.
+			 */
+			if (sent_any) {
+				k_sleep(K_MSEC(telemetry_broadcast_gap_ms()));
+			}
+			(void)meshtastic_send_environment(MESHTASTIC_NODE_BROADCAST, K_NO_WAIT);
+			environment_due_ms =
+				k_uptime_get() +
+				(int64_t)CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_INTERVAL_SEC *
+					MSEC_PER_SEC;
+		}
 	}
 }
 #endif

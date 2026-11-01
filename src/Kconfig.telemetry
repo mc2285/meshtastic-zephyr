@@ -10,6 +10,24 @@ menuconfig MESHTASTIC_TELEMETRY_WANT_RESPONSE
 	  environment-metrics modules (matching upstream DeviceTelemetryModule
 	  and EnvironmentTelemetryModule on TELEMETRY_APP).
 
+config MESHTASTIC_TELEMETRY_BROADCAST_GAP_MIN_MS
+	int "Minimum gap between telemetry broadcasts sent in one wake-up (ms)"
+	default 1000
+	range 0 60000
+	help
+	  When device and environment metrics both fall due in the same
+	  wake-up, a randomized gap separates the two broadcasts so that the
+	  second one is not sent while receiving nodes are still relaying
+	  (and therefore deaf to) the first.
+
+config MESHTASTIC_TELEMETRY_BROADCAST_GAP_MAX_MS
+	int "Maximum gap between telemetry broadcasts sent in one wake-up (ms)"
+	default 2000
+	range 0 60000
+	help
+	  Upper bound of the randomized gap; the actual gap is uniform
+	  between the minimum and this value.
+
 if MESHTASTIC_TELEMETRY_WANT_RESPONSE
 
 config MESHTASTIC_TELEMETRY_REPLY_SUPPRESS_SEC
