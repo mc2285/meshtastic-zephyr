@@ -255,6 +255,38 @@ int meshtastic_channels_get_key(uint8_t index, struct meshtastic_channel_key *ke
 	return channel_get_key(index, key);
 }
 
+int meshtastic_channels_set_psk(uint8_t index, const uint8_t *psk, size_t psk_len)
+{
+	const meshtastic_Channel *current;
+	meshtastic_Channel channel;
+
+	if ((psk == NULL && psk_len != 0U) ||
+	    (psk_len > 1U && psk_len != 16U && psk_len != 32U)) {
+		return -EINVAL;
+	}
+
+	if (psk_len == 1U && psk[0] > 10U) {
+		/* Short-PSK shorthand is defined for 0..10 only (upstream). */
+		return -EINVAL;
+	}
+
+	current = meshtastic_channels_get(index);
+	if (current == NULL) {
+		return -EINVAL;
+	}
+
+	channel = *current;
+	channel.has_settings = true;
+	if (psk_len == 0U) {
+		channel.settings.psk.size = 0U;
+	} else {
+		memcpy(channel.settings.psk.bytes, psk, psk_len);
+		channel.settings.psk.size = (pb_size_t)psk_len;
+	}
+
+	return meshtastic_channels_set_slot(index, &channel);
+}
+
 uint8_t meshtastic_channels_get_hash(uint8_t index)
 {
 	if (index >= MESHTASTIC_MAX_CHANNELS) {

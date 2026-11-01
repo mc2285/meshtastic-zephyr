@@ -42,6 +42,14 @@ generated-header include directory for the whole build, and the headers are
 generated before anything compiles. See ``meshtastic_packet`` and
 :c:func:`meshtastic_send_packet` for wrapping a payload into a mesh packet.
 
+The runtime channel table is likewise public through
+:c:func:`meshtastic_channels_set_slot` and
+:c:func:`meshtastic_channels_set_psk`, so an application can change a
+channel's pre-shared key or promote a new primary channel at runtime without
+re-initializing the table; see ``zephyr/meshtastic/channels.h``. The shell
+exposes the same operations as ``meshtastic channel set <index> [name|role|
+psk|uplink|downlink]``, persisted across reboots through the config store.
+
 Shell
 *****
 

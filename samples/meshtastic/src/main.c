@@ -21,6 +21,7 @@
 #include <zephyr/logging/log.h>
 
 #include <zephyr/meshtastic/meshtastic.h>
+#include <zephyr/meshtastic/channels.h>
 
 LOG_MODULE_REGISTER(meshtastic_sample, LOG_LEVEL_INF);
 
@@ -30,7 +31,7 @@ static const struct device *lora_dev = DEVICE_DT_GET(DT_ALIAS(lora0));
 static const char *packet_channel_name(const struct meshtastic_packet *packet)
 {
 	if (packet->channel_index != MESHTASTIC_CHANNEL_INDEX_INVALID) {
-		return meshtastic_get_channel_name(packet->channel_index);
+		return meshtastic_channels_get_name(packet->channel_index);
 	}
 
 	return "unknown";

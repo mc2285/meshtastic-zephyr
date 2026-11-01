@@ -451,15 +451,6 @@ int meshtastic_get_status(struct meshtastic_status *status);
  */
 uint32_t meshtastic_get_node_id(void);
 
-/**
- * @brief Return the configured name for a channel table slot.
- *
- * @param index Channel index (0..7).
- *
- * @return Channel name string, or an empty string when @p index is invalid.
- */
-const char *meshtastic_get_channel_name(uint8_t index);
-
 #ifdef __cplusplus
 }
 #endif

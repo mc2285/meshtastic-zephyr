@@ -543,11 +543,6 @@ const char *meshtastic_runtime_channel_name(void)
 	return meshtastic_channels_primary_name();
 }
 
-const char *meshtastic_get_channel_name(uint8_t index)
-{
-	return meshtastic_channels_get_name(index);
-}
-
 uint8_t meshtastic_runtime_hop_limit(void)
 {
 	return mt.hop_limit;
