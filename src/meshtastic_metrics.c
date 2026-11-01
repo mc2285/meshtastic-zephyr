@@ -244,6 +244,21 @@ static uint32_t telemetry_broadcast_gap_ms(void)
 	return min_ms + (sys_rand32_get() % (max_ms - min_ms + 1U));
 }
 
+/* Random phase shift of up to a quarter of the interval: nodes flashed
+ * together start their periodic timers on the same tick, and phase-locked
+ * broadcasts from two nodes collide (and pair up every exchange) forever.
+ */
+static uint32_t telemetry_phase_jitter_ms(uint32_t interval_sec)
+{
+	uint32_t interval_ms = (uint32_t)interval_sec * MSEC_PER_SEC;
+
+	if (interval_ms < 4U) {
+		return 0U;
+	}
+
+	return sys_rand32_get() % (interval_ms / 4U);
+}
+
 static void telemetry_thread_fn(void *p1, void *p2, void *p3)
 {
 	const bool device_enabled = IS_ENABLED(CONFIG_MESHTASTIC_DEVICE_METRICS_AUTO_SEND);
@@ -264,13 +279,18 @@ static void telemetry_thread_fn(void *p1, void *p2, void *p3)
 	 * every metric type whenever the shortest interval expires.
 	 */
 	if (device_enabled) {
-		device_due_ms = now_ms + (int64_t)CONFIG_MESHTASTIC_DEVICE_METRICS_INTERVAL_SEC *
-						 MSEC_PER_SEC;
+		device_due_ms = now_ms +
+				(int64_t)CONFIG_MESHTASTIC_DEVICE_METRICS_INTERVAL_SEC *
+					MSEC_PER_SEC +
+				(int64_t)telemetry_phase_jitter_ms(
+					CONFIG_MESHTASTIC_DEVICE_METRICS_INTERVAL_SEC);
 	}
 	if (environment_enabled) {
 		environment_due_ms =
 			now_ms +
-			(int64_t)CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_INTERVAL_SEC * MSEC_PER_SEC;
+			(int64_t)CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_INTERVAL_SEC * MSEC_PER_SEC +
+			(int64_t)telemetry_phase_jitter_ms(
+				CONFIG_MESHTASTIC_ENVIRONMENT_METRICS_INTERVAL_SEC);
 	}
 
 	while (device_enabled || environment_enabled) {

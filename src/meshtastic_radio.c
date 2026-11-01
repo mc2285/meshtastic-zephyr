@@ -101,11 +101,12 @@ static uint32_t mt_busy_backoff_ms(void)
 	return min_ms + (sys_rand32_get() % (max_ms - min_ms + 1U));
 }
 
-int meshtastic_radio_send_wire_now(uint8_t *pkt, uint32_t pkt_len)
+int meshtastic_radio_send_wire_now(uint8_t *pkt, uint32_t pkt_len, bool yield_on_busy)
 {
 	int ret;
 	int retries;
 	int busy_retries = 0;
+	int arm_retries = 0;
 
 #if defined(CONFIG_MESHTASTIC_PACKET_HEXDUMP)
 	log_wire_tx(pkt, pkt_len);
@@ -130,7 +131,14 @@ int meshtastic_radio_send_wire_now(uint8_t *pkt, uint32_t pkt_len)
 
 	ret = lora_config(mt.lora_dev, &mt_lora_cfg);
 	if (ret == 0) {
-		retries = CONFIG_MESHTASTIC_TX_BUSY_RETRIES;
+		/*
+		 * Expendable frames (relays) take a single shot: if the
+		 * channel is busy, drop them at once instead of backing off
+		 * with the radio out of receive mode for the whole retry
+		 * window — hearing the ongoing transmission beats adding
+		 * another copy of an already-flooded packet.
+		 */
+		retries = yield_on_busy ? 0 : CONFIG_MESHTASTIC_TX_BUSY_RETRIES;
 		for (;;) {
 			ret = lora_send(mt.lora_dev, pkt, pkt_len);
 			if (ret != -EBUSY || retries == 0) {
@@ -149,7 +157,17 @@ int meshtastic_radio_send_wire_now(uint8_t *pkt, uint32_t pkt_len)
 
 	k_mutex_unlock(&mt.lock);
 
-	(void)mt_radio_arm_rx();
+	/*
+	 * Re-arm receive before releasing the radio, and retry briefly on
+	 * failure: the RX thread's periodic recovery only runs once per
+	 * RX_REARM_RETRY_MS, so a single failed arm would otherwise leave
+	 * the node deaf for up to a second after every transmit — long
+	 * enough to miss anything sent back within that window.
+	 */
+	while (mt_radio_arm_rx() < 0 && arm_retries < 4) {
+		arm_retries++;
+		k_sleep(K_MSEC(50));
+	}
 
 	(void)k_sem_give(&mt_radio_sem);
 
@@ -159,7 +177,13 @@ int meshtastic_radio_send_wire_now(uint8_t *pkt, uint32_t pkt_len)
 
 	if (ret < 0) {
 		if (ret == -EBUSY) {
-			LOG_DBG("TX failed: channel busy after retries exhausted");
+			if (yield_on_busy) {
+				LOG_DBG("TX skipped: channel busy (expendable frame)");
+			} else {
+				LOG_WRN("TX failed: channel busy after %d retries", busy_retries);
+			}
+		} else {
+			LOG_WRN("TX failed (%d)", ret);
 		}
 		mt.status.tx_failures++;
 		meshtastic_emit_event(MESHTASTIC_EVENT_TX_FAILED, ret, NULL);

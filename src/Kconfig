@@ -72,10 +72,14 @@ menu "LoRa transmit retry"
 config MESHTASTIC_TX_BUSY_RETRIES
 	int "Retries when CAD reports busy channel"
 	range 0 32
-	default 6
+	default 16
 	help
 	  Number of retransmission attempts when lora_send() returns -EBUSY
-	  because CAD/LBT detected channel activity.
+	  because CAD/LBT detected channel activity.  The backoff window
+	  across all retries should comfortably exceed one maximum-length
+	  packet's time on air, so a data packet waits out a colliding
+	  transmission (for example another node's relay) instead of being
+	  dropped.
 
 config MESHTASTIC_TX_BUSY_BACKOFF_MIN_MS
 	int "Minimum backoff on busy channel (ms)"
@@ -88,7 +92,7 @@ config MESHTASTIC_TX_BUSY_BACKOFF_MIN_MS
 config MESHTASTIC_TX_BUSY_BACKOFF_MAX_MS
 	int "Maximum backoff on busy channel (ms)"
 	range 0 60000
-	default 40
+	default 120
 	help
 	  Maximum randomized wait in milliseconds between retry attempts when
 	  the channel is busy.

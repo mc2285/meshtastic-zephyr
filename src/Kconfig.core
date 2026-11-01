@@ -90,19 +90,21 @@ config MESHTASTIC_DUP_CACHE_SIZE
 
 config MESHTASTIC_RELAY_DELAY_MIN_MS
 	int "Minimum random delay before rebroadcasting a received packet (ms)"
-	default 200
+	default 2500
 	range 0 60000
 	help
 	  Randomized delay before a received foreign packet is rebroadcast.
 	  The wait keeps the radio in receive mode for the remainder of a
-	  transmission burst (an immediate relay turns the radio around into
-	  TX while the sender's next packet is still on the air, deafening
-	  the node for that packet) and staggers neighbouring relays so they
-	  do not all transmit at once.
+	  transmission burst, staggers neighbouring relays so they do not
+	  all transmit at once, and — critically — sits the relay outside
+	  the exchange window: peers answer broadcasts (NodeInfo requests,
+	  want_response replies) within roughly two seconds of hearing
+	  them, and a relay transmitting inside that window deafens the
+	  node to the answer.
 
 config MESHTASTIC_RELAY_DELAY_MAX_MS
 	int "Maximum random delay before rebroadcasting a received packet (ms)"
-	default 2000
+	default 5000
 	range 0 60000
 	help
 	  Upper bound of the randomized rebroadcast delay; the actual delay

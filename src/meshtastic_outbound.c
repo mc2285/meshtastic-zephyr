@@ -22,6 +22,7 @@ LOG_MODULE_DECLARE(meshtastic, CONFIG_MESHTASTIC_LOG_LEVEL);
 struct mt_outbound_item {
 	uint8_t wire[MESHTASTIC_PKT_MAX];
 	uint32_t len;
+	bool yield_on_busy;
 	struct k_sem *done;
 	int *result;
 };
@@ -44,7 +45,7 @@ static void mt_outbound_thread_fn(void *p1, void *p2, void *p3)
 	while (true) {
 		(void)k_msgq_get(&mt_outbound_msgq, &item, K_FOREVER);
 
-		ret = meshtastic_radio_send_wire_now(item.wire, item.len);
+		ret = meshtastic_radio_send_wire_now(item.wire, item.len, item.yield_on_busy);
 
 		if (item.result != NULL) {
 			*item.result = ret;
@@ -55,7 +56,8 @@ static void mt_outbound_thread_fn(void *p1, void *p2, void *p3)
 	}
 }
 
-static int outbound_enqueue(const uint8_t *pkt, uint32_t pkt_len, k_timeout_t wait)
+static int outbound_enqueue(const uint8_t *pkt, uint32_t pkt_len, k_timeout_t wait,
+			    bool yield_on_busy)
 {
 	struct mt_outbound_item item;
 	struct k_sem sem;
@@ -68,6 +70,7 @@ static int outbound_enqueue(const uint8_t *pkt, uint32_t pkt_len, k_timeout_t wa
 
 	memcpy(item.wire, pkt, pkt_len);
 	item.len = pkt_len;
+	item.yield_on_busy = yield_on_busy;
 
 	if (K_TIMEOUT_EQ(wait, K_NO_WAIT)) {
 		item.done = NULL;
@@ -95,12 +98,17 @@ static int outbound_enqueue(const uint8_t *pkt, uint32_t pkt_len, k_timeout_t wa
 
 int meshtastic_radio_send_wire(uint8_t *pkt, uint32_t pkt_len)
 {
-	return outbound_enqueue(pkt, pkt_len, K_NO_WAIT);
+	return outbound_enqueue(pkt, pkt_len, K_NO_WAIT, false);
+}
+
+int meshtastic_radio_send_wire_best_effort(uint8_t *pkt, uint32_t pkt_len)
+{
+	return outbound_enqueue(pkt, pkt_len, K_NO_WAIT, true);
 }
 
 int meshtastic_radio_send_wire_wait(const uint8_t *pkt, uint32_t pkt_len, k_timeout_t timeout)
 {
-	return outbound_enqueue(pkt, pkt_len, timeout);
+	return outbound_enqueue(pkt, pkt_len, timeout, false);
 }
 
 int meshtastic_outbound_init(void)

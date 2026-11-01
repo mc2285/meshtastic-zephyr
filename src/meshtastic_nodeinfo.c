@@ -5,6 +5,7 @@
 #include <errno.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/random/random.h>
 #include <zephyr/sys/util.h>
 
 #include <pb_decode.h>
@@ -210,6 +211,14 @@ static void meshtastic_module_nodeinfo_on_packet(const struct meshtastic_packet 
 		send_ret = nodeinfo_build_packet(packet->from, true, channel, 0U, payload,
 						 &nodeinfo_packet);
 		if (send_ret == 0) {
+			/*
+			 * Every node that hears the same unknown peer asks for
+			 * its NodeInfo at the same instant — the trigger is
+			 * the very same broadcast.  A short random jitter
+			 * separates the paired requests so LBT can serialize
+			 * them instead of both transmissions colliding.
+			 */
+			k_sleep(K_MSEC(50U + (sys_rand32_get() % 451U)));
 			(void)meshtastic_send_packet(&nodeinfo_packet, K_NO_WAIT);
 		}
 	}
@@ -263,15 +272,25 @@ static struct k_thread nodeinfo_thread;
 
 static void nodeinfo_thread_fn(void *p1, void *p2, void *p3)
 {
+	uint32_t interval_sec = (uint32_t)CONFIG_MESHTASTIC_NODEINFO_INTERVAL_SEC;
+	uint32_t phase_sec = interval_sec / 4U;
+	uint32_t first_delay_sec = (uint32_t)CONFIG_MESHTASTIC_NODEINFO_START_DELAY_SEC;
+
 	ARG_UNUSED(p1);
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
 	/*
 	 * Delay the first announcement so the radio/network has time to
-	 * settle, mirroring the upstream NodeInfoModule start delay.
+	 * settle, mirroring the upstream NodeInfoModule start delay, and add
+	 * a random phase: nodes flashed together start their timers on the
+	 * same tick, and phase-locked periodic broadcasts would collide
+	 * (and pair up every exchange) on every cycle.
 	 */
-	k_sleep(K_SECONDS(CONFIG_MESHTASTIC_NODEINFO_START_DELAY_SEC));
+	if (phase_sec != 0U) {
+		first_delay_sec += sys_rand32_get() % phase_sec;
+	}
+	k_sleep(K_SECONDS(first_delay_sec));
 
 	while (true) {
 		(void)meshtastic_send_node_info(MESHTASTIC_NODE_BROADCAST);

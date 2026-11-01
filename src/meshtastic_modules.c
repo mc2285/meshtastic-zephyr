@@ -4,6 +4,9 @@
 
 #include <errno.h>
 
+#include <zephyr/kernel.h>
+#include <zephyr/random/random.h>
+
 #include "meshtastic_modules.h"
 
 #include <zephyr/logging/log.h>
@@ -66,7 +69,25 @@ void meshtastic_dispatch_modules(const struct meshtastic_packet *packet)
 	meshtastic_packet_set_reply_to(&reply, packet);
 
 	LOG_INF("Module '%s' sending want_response reply", handler->name);
+	/*
+	 * Random jitter before the first attempt: several nodes can be
+	 * answering each other's want_response requests in the same instant
+	 * (paired exchanges triggered by the same broadcasts), and without
+	 * jitter their replies start together and collide.  The jitter lets
+	 * LBT serialize the pair.
+	 */
+	k_sleep(K_MSEC(50U + (sys_rand32_get() % 451U)));
 	ret = meshtastic_send_packet(&reply, K_NO_WAIT);
+	if (ret < 0) {
+		/*
+		 * The first attempt most likely lost the LBT race: the
+		 * channel was busy and the transmit was dropped without
+		 * reaching the air.  Back off briefly and try once more;
+		 * the reply picks a fresh packet id on the retry.
+		 */
+		k_sleep(K_MSEC(200U + (sys_rand32_get() % 401U)));
+		ret = meshtastic_send_packet(&reply, K_NO_WAIT);
+	}
 	if (ret < 0) {
 		LOG_WRN("Reply send failed (%d)", ret);
 	}
