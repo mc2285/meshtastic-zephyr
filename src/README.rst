@@ -24,6 +24,24 @@ Key features
   MQTT gateway support.
 * Advertise optional GNSS position, telemetry, NodeInfo, and NodeDB data.
 
+Protobuf API
+************
+
+The nanopb-generated headers for the Meshtastic protobuf schemas are part of
+the public API. After enabling :kconfig:option:`CONFIG_MESHTASTIC` the module
+publishes its generated headers on the include path, so an application can
+construct payloads directly::
+
+  #include <zephyr/meshtastic/meshtastic.h>
+  #include <meshtastic/mesh.pb.h>
+  #include <meshtastic/telemetry.pb.h>
+  #include <meshtastic/portnums.pb.h>
+
+No CMake changes are needed on the application side; the module records the
+generated-header include directory for the whole build, and the headers are
+generated before anything compiles. See ``meshtastic_packet`` and
+:c:func:`meshtastic_send_packet` for wrapping a payload into a mesh packet.
+
 Shell
 *****
 

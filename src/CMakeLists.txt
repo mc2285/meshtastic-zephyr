@@ -26,8 +26,15 @@ if(CONFIG_MESHTASTIC)
   endif()
   zephyr_nanopb_sources(meshtastic ${MESHTASTIC_NANOPB_PROTOS})
 
+  # The generated protobuf headers are part of the public API surface:
+  # applications build MeshPacket/Telemetry payloads against them.  Recording
+  # the path here (configure time) with zephyr_include_directories() exposes
+  # it to the application build as well, while the nanopb custom commands
+  # generate the headers before anything compiles.  Applications can then
+  # simply do  #include <meshtastic/mesh.pb.h>  with no CMake of their own.
+  zephyr_include_directories(${CMAKE_CURRENT_BINARY_DIR}/proto)
+
   target_include_directories(meshtastic PRIVATE
-    ${CMAKE_CURRENT_BINARY_DIR}/proto
     ${CMAKE_CURRENT_SOURCE_DIR}
   )
 
