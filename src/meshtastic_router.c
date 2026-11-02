@@ -130,7 +130,7 @@ static void mt_relay_work_handler(struct k_work *work)
 
 	LOG_DBG("Relaying id=0x%08x from 0x%08x (len=%u)", slot->id, slot->src, slot->len);
 
-	ret = meshtastic_radio_send_wire_best_effort(slot->wire, slot->len);
+	ret = meshtastic_radio_send_wire(slot->wire, slot->len);
 	if (ret < 0) {
 		if (ret == -EBUSY) {
 			LOG_WRN("Relay dropped: channel busy (id=0x%08x)", slot->id);

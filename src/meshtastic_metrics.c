@@ -252,11 +252,11 @@ static uint32_t telemetry_phase_jitter_ms(uint32_t interval_sec)
 {
 	uint32_t interval_ms = (uint32_t)interval_sec * MSEC_PER_SEC;
 
-	if (interval_ms < 4U) {
+	if (interval_ms < 16U) {
 		return 0U;
 	}
 
-	return sys_rand32_get() % (interval_ms / 4U);
+	return sys_rand32_get() % (interval_ms / 16U);
 }
 
 static void telemetry_thread_fn(void *p1, void *p2, void *p3)
