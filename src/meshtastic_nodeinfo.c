@@ -272,25 +272,11 @@ static struct k_thread nodeinfo_thread;
 
 static void nodeinfo_thread_fn(void *p1, void *p2, void *p3)
 {
-	uint32_t interval_sec = (uint32_t)CONFIG_MESHTASTIC_NODEINFO_INTERVAL_SEC;
-	uint32_t phase_sec = interval_sec / 4U;
-	uint32_t first_delay_sec = (uint32_t)CONFIG_MESHTASTIC_NODEINFO_START_DELAY_SEC;
-
 	ARG_UNUSED(p1);
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
-	/*
-	 * Delay the first announcement so the radio/network has time to
-	 * settle, mirroring the upstream NodeInfoModule start delay, and add
-	 * a random phase: nodes flashed together start their timers on the
-	 * same tick, and phase-locked periodic broadcasts would collide
-	 * (and pair up every exchange) on every cycle.
-	 */
-	if (phase_sec != 0U) {
-		first_delay_sec += sys_rand32_get() % phase_sec;
-	}
-	k_sleep(K_SECONDS(first_delay_sec));
+	k_sleep(K_SECONDS(CONFIG_MESHTASTIC_NODEINFO_START_DELAY_SEC));	
 
 	while (true) {
 		(void)meshtastic_send_node_info(MESHTASTIC_NODE_BROADCAST);
