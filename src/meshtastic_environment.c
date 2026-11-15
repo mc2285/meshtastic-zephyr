@@ -66,6 +66,13 @@ static const struct device *const mt_env_light = DEVICE_DT_GET(DT_ALIAS(light_se
 #define MT_ENV_HAS_LIGHT 0
 #endif
 
+#if DT_NODE_HAS_STATUS(DT_ALIAS(soil_temp0), okay)
+#define MT_ENV_HAS_SOIL_TEMP 1
+static const struct device *const mt_env_soil_temp = DEVICE_DT_GET(DT_ALIAS(soil_temp0));
+#else
+#define MT_ENV_HAS_SOIL_TEMP 0
+#endif
+
 #define MT_ENV_ANY                                                                                 \
 	(MT_ENV_HAS_TEMP || MT_ENV_HAS_HUM || MT_ENV_HAS_PRESS || MT_ENV_HAS_GAS ||                \
 	 MT_ENV_HAS_LIGHT)
@@ -139,6 +146,20 @@ int meshtastic_collect_environment(meshtastic_EnvironmentMetrics *m)
 	if (mt_env_read(mt_env_light, SENSOR_CHAN_LIGHT, 1.0f, &m->lux)) {
 		m->has_lux = true;
 		LOG_DBG("Collected lux: %f Lux", (double)m->lux);
+		count++;
+	}
+
+	if (mt_env_read(mt_env_light, SENSOR_CHAN_IR, 1.0f, &m->ir_lux)) {
+		m->has_ir_lux = true;
+		LOG_DBG("Collected IR: %f Lux", (double)m->ir_lux);
+		count++;
+	}
+#endif
+#if MT_ENV_HAS_SOIL_TEMP
+	/* Degrees C. */
+	if (mt_env_read(mt_env_soil_temp, SENSOR_CHAN_AMBIENT_TEMP, 1.0f, &m->soil_temperature)) {
+		m->has_soil_temperature = true;
+		LOG_DBG("Collected soil temperature: %f °C", (double)m->soil_temperature);
 		count++;
 	}
 #endif
